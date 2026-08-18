@@ -15,7 +15,7 @@ jobs:
           sudo apt-get install -y --no-install-recommends \
             libncurses-dev libncurses6 lz4 libssl-dev bc bison flex zip build-essential
 
-          # 建立 libncurses.so.5 / libtinfo.so.5 兼容软链接
+          # 建立 libncurses 兼容软链接
           sudo ln -sf /usr/lib/x86_64-linux-gnu/libncurses.so.6 /usr/lib/x86_64-linux-gnu/libncurses.so.5 || true
           sudo ln -sf /usr/lib/x86_64-linux-gnu/libtinfo.so.6 /usr/lib/x86_64-linux-gnu/libtinfo.so.5 || true
 
@@ -24,16 +24,25 @@ jobs:
           # 1. 克隆 64 位交叉编译器
           git clone --depth=1 https://android.googlesource.com/platform/prebuilts/gcc/linux-x86/aarch64/aarch64-linux-android-4.9 -b android-10.0.0_r47 toolchain
           
-          # 2. 【关键修复】克隆 32 位交叉编译器（用于 compat vDSO 编译）
+          # 2. 克隆 32 位交叉编译器（编译 compat vDSO）
           git clone --depth=1 https://android.googlesource.com/platform/prebuilts/gcc/linux-x86/arm/arm-linux-androideabi-4.9 -b android-10.0.0_r47 toolchain-arm32
           
-          # 3. 克隆内核源码与 AnyKernel3 打包模版
+          # 3. 克隆 Android 10 内核源码与 AnyKernel3 模版
           git clone --depth=1 https://android.googlesource.com/kernel/msm.git -b android-msm-marlin-3.18-android10 kernel
           git clone --depth=1 https://github.com/osm0sis/AnyKernel3.git anykernel
 
-      - name: 3. 注入配置并编译内核
+      - name: 3. 注入配置、修复 GCC 10+ 兼容性并编译内核
         run: |
           cd kernel
+          
+          # -------------------- 关键修复区域 --------------------
+          # 1. 修复 GCC 10+ 下 dtc 编译器 yylloc 重复定义报错
+          sed -i 's/YYLTYPE yylloc;/extern YYLTYPE yylloc;/' scripts/dtc/dtc-lexer.l || true
+          sed -i 's/YYLTYPE yylloc;/extern YYLTYPE yylloc;/' scripts/dtc/dtc-lexer.lex.c_shipped || true
+          
+          # 2. 为 Makefile 宿主编译选项追加 -fcommon 兜底
+          sed -i 's/^HOSTCFLAGS   :=/HOSTCFLAGS   := -fcommon /' Makefile
+          # ------------------------------------------------------
           
           # 注入 NFS 相关配置
           cat << 'EOF' >> arch/arm64/configs/marlin_defconfig
@@ -50,7 +59,7 @@ jobs:
           CONFIG_LOCKD=y
           EOF
           
-          # 导出 64 位与 32 位交叉编译器路径
+          # 导出 64 位与 32 位交叉编译器环境变量
           export ARCH=arm64
           export SUBARCH=arm64
           export CROSS_COMPILE=$GITHUB_WORKSPACE/toolchain/bin/aarch64-linux-android-
