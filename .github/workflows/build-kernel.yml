@@ -6,23 +6,22 @@ on:
 jobs:
   build-kernel:
     runs-on: ubuntu-latest
-    timeout-minutes: 20  # 整体超时保护
+    timeout-minutes: 20
 
     steps:
-      - name: 1. 修复源并极速安装必要依赖
+      - name: 1. 适配 Ubuntu 24.04 并安装必要依赖
         run: |
-          # 1. 切换为主官方源，防止 Azure 镜像源挂起
-          sudo sed -i 's/azure.archive.ubuntu.com/archive.ubuntu.com/g' /etc/apt/sources.list
-          
-          # 2. 设置 apt 快速超时（10秒）并仅更新必要源
-          sudo apt-get update -o Acquire::http::Timeout="10" -o Acquire::Retries="1" || true
-          
-          # 3. 仅安装编译必需的库（大多数工具 Actions 已内置）
-          sudo apt-get install -y --no-install-recommends libncurses5 lz4 libssl-dev bc bison flex zip
+          # 快速更新源并安装 Ubuntu 24.04 支持的依赖库（用 libncurses-dev / libncurses6 替代已废弃的 libncurses5）
+          sudo apt-get update -o Acquire::http::Timeout="10" -o Acquire::Retries="1"
+          sudo apt-get install -y --no-install-recommends \
+            libncurses-dev libncurses6 lz4 libssl-dev bc bison flex zip build-essential
+
+          # 为老旧编译工具建立 libncurses.so.5 / libtinfo.so.5 兼容软链接（防止内核构建工具报错）
+          sudo ln -sf /usr/lib/x86_64-linux-gnu/libncurses.so.6 /usr/lib/x86_64-linux-gnu/libncurses.so.5 || true
+          sudo ln -sf /usr/lib/x86_64-linux-gnu/libtinfo.so.6 /usr/lib/x86_64-linux-gnu/libtinfo.so.5 || true
 
       - name: 2. 克隆工具链与内核源码
         run: |
-          # 添加 --depth=1 浅克隆加速下载
           git clone --depth=1 https://android.googlesource.com/platform/prebuilts/gcc/linux-x86/aarch64/aarch64-linux-android-4.9 -b android-10.0.0_r47 toolchain
           git clone --depth=1 https://android.googlesource.com/kernel/msm.git -b android-msm-marlin-3.18-android10 kernel
           git clone --depth=1 https://github.com/osm0sis/AnyKernel3.git anykernel
@@ -50,11 +49,11 @@ jobs:
           export SUBARCH=arm64
           export CROSS_COMPILE=$GITHUB_WORKSPACE/toolchain/bin/aarch64-linux-android-
           
-          # 生成配置并自动解决默认选项（防止终端交互等待）
+          # 生成配置并自动解决所有默认依赖（防止终端交互等待）
           make marlin_defconfig
           make olddefconfig
           
-          # 并行编译
+          # 多核并行编译
           make -j$(nproc)
 
       - name: 4. 打包 AnyKernel3 卡刷包
