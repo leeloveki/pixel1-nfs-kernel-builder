@@ -11,18 +11,23 @@ jobs:
     steps:
       - name: 1. 适配 Ubuntu 24.04 并安装必要依赖
         run: |
-          # 快速更新源并安装 Ubuntu 24.04 支持的依赖库（用 libncurses-dev / libncurses6 替代已废弃的 libncurses5）
           sudo apt-get update -o Acquire::http::Timeout="10" -o Acquire::Retries="1"
           sudo apt-get install -y --no-install-recommends \
             libncurses-dev libncurses6 lz4 libssl-dev bc bison flex zip build-essential
 
-          # 为老旧编译工具建立 libncurses.so.5 / libtinfo.so.5 兼容软链接（防止内核构建工具报错）
+          # 建立 libncurses.so.5 / libtinfo.so.5 兼容软链接
           sudo ln -sf /usr/lib/x86_64-linux-gnu/libncurses.so.6 /usr/lib/x86_64-linux-gnu/libncurses.so.5 || true
           sudo ln -sf /usr/lib/x86_64-linux-gnu/libtinfo.so.6 /usr/lib/x86_64-linux-gnu/libtinfo.so.5 || true
 
-      - name: 2. 克隆工具链与内核源码
+      - name: 2. 克隆 64 位与 32 位工具链及内核源码
         run: |
+          # 1. 克隆 64 位交叉编译器
           git clone --depth=1 https://android.googlesource.com/platform/prebuilts/gcc/linux-x86/aarch64/aarch64-linux-android-4.9 -b android-10.0.0_r47 toolchain
+          
+          # 2. 【关键修复】克隆 32 位交叉编译器（用于 compat vDSO 编译）
+          git clone --depth=1 https://android.googlesource.com/platform/prebuilts/gcc/linux-x86/arm/arm-linux-androideabi-4.9 -b android-10.0.0_r47 toolchain-arm32
+          
+          # 3. 克隆内核源码与 AnyKernel3 打包模版
           git clone --depth=1 https://android.googlesource.com/kernel/msm.git -b android-msm-marlin-3.18-android10 kernel
           git clone --depth=1 https://github.com/osm0sis/AnyKernel3.git anykernel
 
@@ -45,11 +50,13 @@ jobs:
           CONFIG_LOCKD=y
           EOF
           
+          # 导出 64 位与 32 位交叉编译器路径
           export ARCH=arm64
           export SUBARCH=arm64
           export CROSS_COMPILE=$GITHUB_WORKSPACE/toolchain/bin/aarch64-linux-android-
+          export CROSS_COMPILE_ARM32=$GITHUB_WORKSPACE/toolchain-arm32/bin/arm-linux-androideabi-
           
-          # 生成配置并自动解决所有默认依赖（防止终端交互等待）
+          # 生成并校准配置（非交互式）
           make marlin_defconfig
           make olddefconfig
           
