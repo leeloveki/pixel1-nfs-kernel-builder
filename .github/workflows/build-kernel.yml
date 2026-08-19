@@ -64,6 +64,16 @@ jobs:
           CONFIG_CRYPTO_CBC=y
           # CONFIG_DEBUG_INFO is not set
           EOF
+
+          # 追加深度精简配置，压缩体积
+          cat << 'EOF' >> arch/arm64/configs/marlin_defconfig
+          # CONFIG_DEBUG_INFO is not set
+          # CONFIG_DEBUG_FS is not set
+          # CONFIG_FTRACE is not set
+          # CONFIG_KPROBES is not set
+          # CONFIG_SLUB_DEBUG is not set
+          # CONFIG_PRINTK_DEBUG is not set
+          EOF
           
           export ARCH=arm64
           export SUBARCH=arm64
