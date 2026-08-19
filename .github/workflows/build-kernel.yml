@@ -30,22 +30,19 @@ jobs:
           # 3. 克隆内核源码与 AnyKernel3 打包模版
           git clone --depth=1 https://android.googlesource.com/kernel/msm.git -b android-msm-marlin-3.18-android10 kernel
           git clone --depth=1 https://github.com/osm0sis/AnyKernel3.git anykernel
-
       - name: 3. 注入配置、修复源码路径与兼容性并编译
         run: |
           cd kernel
           
-          # -------------------- 关键修复补丁 --------------------
-          # 1. 【本次修复】修复 thermal_core.c 中 base.h 相对引用语法错误
+          # 1. 修复 thermal_core.c 引用错误
           sed -i 's|<../base/base.h>|"../base/base.h"|g' drivers/thermal/thermal_core.c
           
-          # 2. 修复 GCC 10+ 下 dtc 编译器 yylloc 重复定义
+          # 2. 修复 GCC 10+ dtc 冲突与编译标志
           sed -i 's/YYLTYPE yylloc;/extern YYLTYPE yylloc;/' scripts/dtc/dtc-lexer.l || true
           sed -i 's/YYLTYPE yylloc;/extern YYLTYPE yylloc;/' scripts/dtc/dtc-lexer.lex.c_shipped || true
           sed -i 's/^HOSTCFLAGS   :=/HOSTCFLAGS   := -fcommon /' Makefile
-          # ------------------------------------------------------
           
-          # 注入完整 NFS 支持及相关加密与解析依赖
+          # 3. 注入 NFS 配置并关闭 DEBUG_INFO 缩减体积
           cat << 'EOF' >> arch/arm64/configs/marlin_defconfig
           CONFIG_NETWORK_FILESYSTEMS=y
           CONFIG_NFS_FS=y
@@ -63,29 +60,63 @@ jobs:
           CONFIG_CRYPTO_MD5=y
           CONFIG_CRYPTO_DES=y
           CONFIG_CRYPTO_CBC=y
+          # CONFIG_DEBUG_INFO is not set
           EOF
           
-          # 导出交叉编译环境变量
           export ARCH=arm64
           export SUBARCH=arm64
           export CROSS_COMPILE=$GITHUB_WORKSPACE/toolchain/bin/aarch64-linux-android-
           export CROSS_COMPILE_ARM32=$GITHUB_WORKSPACE/toolchain-arm32/bin/arm-linux-androideabi-
           
-          # 生成并校准配置
           make marlin_defconfig
           make olddefconfig
           
-          # 忽略警告并编译（遇到错误自动降级单核输出清晰日志）
+          # 编译生成 Image.gz-dtb
           make -j$(nproc) KCFLAGS="-w" || make -j1 KCFLAGS="-w"
-
+  
       - name: 4. 打包 AnyKernel3 卡刷包
         run: |
-          cp kernel/arch/arm64/boot/Image.lz4-dtb anykernel/Image.lz4-dtb
+          # 【关键修复】使用 Gzip 压缩的高密度镜像文件 Image.gz-dtb
+          cp kernel/arch/arm64/boot/Image.gz-dtb anykernel/Image.gz-dtb
+          
           cd anykernel
-          sed -i 's/device.name1=.*/device.name1=marlin\ndevice.name2=sailfish\ndevice.name3=Pixel\ndevice.name4=Pixel XL/' anykernel.sh
-          sed -i 's/is_slot_device=0/is_slot_device=1/' anykernel.sh
+          # 移除多余的 Image.lz4-dtb（如果存在）
+          rm -f Image.lz4-dtb
+          
+          # 修正 anykernel.sh 配置
+          cat << 'EOF' > anykernel.sh
+          ### AnyKernel3 Ramdisk Mod Script
+          properties() { '
+          kernel.string=Pixel 1 NFS Kernel
+          do.devicecheck=1
+          do.modules=0
+          do.systemless=1
+          do.cleanup=1
+          do.cleanuponabort=0
+          device.name1=marlin
+          device.name2=sailfish
+          device.name3=Pixel
+          device.name4=Pixel XL
+          supported.versions=
+          '; }
+  
+          boot_attributes() {
+          set_perm_recursive 0 0 755 644 $RAMDISK/*;
+          set_perm_recursive 0 0 750 750 $RAMDISK/init* $RAMDISK/sbin;
+          }
+  
+          BLOCK=boot;
+          IS_SLOT_DEVICE=1;
+          RAMDISK_COMPRESSION=auto;
+          PATCH_VBMETA_FLAG=auto;
+  
+          . tools/ak3-core.sh;
+  
+          dump_boot;
+          write_boot;
+          EOF
+          
           zip -r9 ../Pixel1-Android10-NFS-Kernel.zip * -x .git README.md *placeholder
-
       - name: 5. 上传生成的内核卡刷包
         uses: actions/upload-artifact@v4
         with:
