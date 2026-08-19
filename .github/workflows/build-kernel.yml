@@ -21,29 +21,31 @@ jobs:
 
       - name: 2. 克隆 64 位与 32 位工具链及内核源码
         run: |
-          # 1. 克隆 64 位交叉编译器
           git clone --depth=1 https://android.googlesource.com/platform/prebuilts/gcc/linux-x86/aarch64/aarch64-linux-android-4.9 -b android-10.0.0_r47 toolchain
-          
-          # 2. 克隆 32 位交叉编译器
           git clone --depth=1 https://android.googlesource.com/platform/prebuilts/gcc/linux-x86/arm/arm-linux-androideabi-4.9 -b android-10.0.0_r47 toolchain-arm32
-          
-          # 3. 克隆内核源码与 AnyKernel3 打包模版
           git clone --depth=1 https://android.googlesource.com/kernel/msm.git -b android-msm-marlin-3.18-android10 kernel
           git clone --depth=1 https://github.com/osm0sis/AnyKernel3.git anykernel
-      - name: 3. 注入配置、修复源码路径与兼容性并编译
+
+      - name: 3. 注入配置、切换为 Gzip 并编译内核
         run: |
           cd kernel
           
-          # 1. 修复 thermal_core.c 引用错误
+          # 1. 修复 thermal_core.c 相对路径引用
           sed -i 's|<../base/base.h>|"../base/base.h"|g' drivers/thermal/thermal_core.c
           
-          # 2. 修复 GCC 10+ dtc 冲突与编译标志
+          # 2. 修复 GCC 10+ dtc 变量冲突
           sed -i 's/YYLTYPE yylloc;/extern YYLTYPE yylloc;/' scripts/dtc/dtc-lexer.l || true
           sed -i 's/YYLTYPE yylloc;/extern YYLTYPE yylloc;/' scripts/dtc/dtc-lexer.lex.c_shipped || true
           sed -i 's/^HOSTCFLAGS   :=/HOSTCFLAGS   := -fcommon /' Makefile
           
-          # 3. 注入 NFS 配置并关闭 DEBUG_INFO 缩减体积
+          # 3. 【关键修复】禁用 LZ4 并切换为 Gzip 压缩
+          sed -i 's/CONFIG_BUILD_ARM64_APPENDED_LZ4_IMAGE=y/# CONFIG_BUILD_ARM64_APPENDED_LZ4_IMAGE is not set/' arch/arm64/configs/marlin_defconfig
+          sed -i 's/CONFIG_KERNEL_LZ4=y/# CONFIG_KERNEL_LZ4 is not set/' arch/arm64/configs/marlin_defconfig
+          
+          # 4. 注入 NFS 支持与 Gzip 配置
           cat << 'EOF' >> arch/arm64/configs/marlin_defconfig
+          CONFIG_KERNEL_GZIP=y
+          CONFIG_BUILD_ARM64_APPENDED_DTB_IMAGE=y
           CONFIG_NETWORK_FILESYSTEMS=y
           CONFIG_NFS_FS=y
           CONFIG_NFS_V2=y
@@ -71,23 +73,19 @@ jobs:
           make marlin_defconfig
           make olddefconfig
           
-          # 编译生成 Image.gz-dtb
-          make -j$(nproc) KCFLAGS="-w" || make -j1 KCFLAGS="-w"
-  
+          # 【关键修复】显式构建 Image.gz-dtb 目标
+          make -j$(nproc) Image.gz-dtb dtbs KCFLAGS="-w" || make -j1 Image.gz-dtb dtbs KCFLAGS="-w"
+
       - name: 4. 打包 AnyKernel3 卡刷包
         run: |
-          # 【关键修复】使用 Gzip 压缩的高密度镜像文件 Image.gz-dtb
           cp kernel/arch/arm64/boot/Image.gz-dtb anykernel/Image.gz-dtb
-          
           cd anykernel
-          # 移除多余的 Image.lz4-dtb（如果存在）
           rm -f Image.lz4-dtb
           
-          # 修正 anykernel.sh 配置
           cat << 'EOF' > anykernel.sh
           ### AnyKernel3 Ramdisk Mod Script
           properties() { '
-          kernel.string=Pixel 1 NFS Kernel
+          kernel.string=Pixel 1 Android 10 NFS Kernel
           do.devicecheck=1
           do.modules=0
           do.systemless=1
@@ -99,24 +97,25 @@ jobs:
           device.name4=Pixel XL
           supported.versions=
           '; }
-  
+
           boot_attributes() {
           set_perm_recursive 0 0 755 644 $RAMDISK/*;
           set_perm_recursive 0 0 750 750 $RAMDISK/init* $RAMDISK/sbin;
           }
-  
+
           BLOCK=boot;
           IS_SLOT_DEVICE=1;
           RAMDISK_COMPRESSION=auto;
           PATCH_VBMETA_FLAG=auto;
-  
+
           . tools/ak3-core.sh;
-  
+
           dump_boot;
           write_boot;
           EOF
           
           zip -r9 ../Pixel1-Android10-NFS-Kernel.zip * -x .git README.md *placeholder
+
       - name: 5. 上传生成的内核卡刷包
         uses: actions/upload-artifact@v4
         with:
